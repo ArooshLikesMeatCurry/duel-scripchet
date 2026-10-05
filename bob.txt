@@ -1,4 +1,4 @@
- -- ============================================================
+-- ============================================================
 -- AROOSH HUB · Cinematic Intro
 -- Audio: put ArooshIntro.mp3 in executor workspace
 -- Moon: Bangladesh countryball
@@ -988,6 +988,7 @@ print("[Aroosh] Intro loaded · BANGLADESH ON TOP")
 	StretchIntensity = 0.75,
 	CypherAimbotApproachSpeed = 82,
 	AutoTPDownHeight = 20,
+	BodyLockRadius = 60,
 	}
 	local customSpeeds = {}
 	local autoStealValues = {
@@ -1020,6 +1021,7 @@ print("[Aroosh] Intro loaded · BANGLADESH ON TOP")
 	["Speed Boost"] = nil,
 	["Aimbot"] = nil,
 	["Bat V2"] = nil,
+	["Body Lock"] = nil,
 	["Anti Bat"] = nil,
 	["Carry Speed"] = nil,
 	-- Mini UI keybinds (unified)
@@ -1476,6 +1478,7 @@ toggleDefaults["Optimizer"] = true
 	toggleDefaults["Auto Carry Speed"] = false
 	toggleDefaults["Carry Speed"] = false
 	toggleDefaults["Unwalk"] = false
+	toggleDefaults["Body Lock"] = false
 	toggleDefaults["Harder Hit Anim"] = false
 	toggleDefaults["Animaciones"] = false
 	toggleDefaults["Custom FOV"] = false
@@ -2989,42 +2992,29 @@ if toggleStates["Anti Ragdoll"] then startAntiRagdoll() end
 		pcall(function() _G.__ArooshSpeedLastDesiredH = Vector3.zero end)
 	end
 	local function applyVelocitySpeed(direction, speed)
+		-- Adapt speed source: exact target velocity (no soft lerp / no ping scale)
 		local character = Player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		local root = character and character:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not root or humanoid.Health <= 0 then return end
 		if type(speed) ~= "number" or speed ~= speed or speed <= 0 or speed == math.huge then return end
 
+		-- Prefer real Y (same idea as Adapt s2State window)
 		local verticalVelocity = root.AssemblyLinearVelocity.Y
 		if _G._ZurichHub_MovementBlocked == true or _G._CrystalHub_MovementBlocked == true then
 			root.AssemblyLinearVelocity = Vector3.new(0, math.min(verticalVelocity, 0), 0)
-			_G.__ArooshSpeedLastDesiredH = Vector3.zero
 			return
 		end
 		if direction and direction.Magnitude > 0.05 then
 			pcall(function()
-				if root.SetNetworkOwner then root:SetNetworkOwner(Player) end
+				if root.SetNetworkOwner then
+					root:SetNetworkOwner(Player)
+				end
 			end)
 			local unit = direction.Unit
-			local pingBoost = tonumber(_G.__ArooshSpeedPingBoost) or 1
-			local targetSpeed = speed * pingBoost
-			local desiredH = Vector3.new(unit.X * targetSpeed, 0, unit.Z * targetSpeed)
-			local current = root.AssemblyLinearVelocity
-			local curH = Vector3.new(current.X, 0, current.Z)
-			local lastH = _G.__ArooshSpeedLastDesiredH
-			if typeof(lastH) == "Vector3" and lastH.Magnitude > 8 and curH.Magnitude < lastH.Magnitude * 0.55 then
-				-- server lagback: re-force full intended horizontal speed
-				desiredH = lastH.Unit * targetSpeed
-			elseif curH.Magnitude > 1 and desiredH.Magnitude > 1 then
-				desiredH = curH:Lerp(desiredH, 0.75)
-				if desiredH.Magnitude > 0.01 then
-					desiredH = desiredH.Unit * targetSpeed
-				end
-			end
-			_G.__ArooshSpeedLastDesiredH = desiredH
-			root.AssemblyLinearVelocity = Vector3.new(desiredH.X, verticalVelocity, desiredH.Z)
+			-- Apply exact target speed (Adapt — no hard cap)
+			root.AssemblyLinearVelocity = Vector3.new(unit.X * speed, verticalVelocity, unit.Z * speed)
 		else
-			_G.__ArooshSpeedLastDesiredH = Vector3.zero
 			root.AssemblyLinearVelocity = Vector3.new(0, verticalVelocity, 0)
 		end
 	end
@@ -3064,8 +3054,13 @@ if toggleStates["Anti Ragdoll"] then startAntiRagdoll() end
 					end
 				end
 			end
-			local selectedSpeed = getTargetSpeed(Player:GetAttribute("Stealing") == true)
-			applyVelocitySpeed(direction, tonumber(selectedSpeed) or 16)
+			local selectedSpeed = tonumber(getTargetSpeed(Player:GetAttribute("Stealing") == true)) or 16
+			-- Adapt: floor at walk when below default
+			if selectedSpeed <= 16 then
+				applyVelocitySpeed(direction, 16)
+			else
+				applyVelocitySpeed(direction, selectedSpeed)
+			end
 		end
 		_G.__speedBoostConn = RunService.RenderStepped:Connect(speedBoostTick)
 		_G.__speedBoostHeartbeatConn = RunService.Heartbeat:Connect(speedBoostTick)
@@ -5340,6 +5335,97 @@ _G.__CrystalTrackConn(RunService.PostSimulation:Connect(alwaysOnAntiFling))
 		end)
 		-- AnimationPlayed bloquea las pistas externas sin escanear cada frame.
 		stopAllTracks()
+	end
+
+	
+	-- ==================== BODY LOCK (Adapt-style) ====================
+	do
+	_G.__ArooshBodyLockRadius = tonumber(_G.__ArooshBodyLockRadius) or tonumber(speedValues and speedValues.BodyLockRadius) or 60
+	local bodyLockConn = nil
+
+	local function getBodyLockRadius()
+		local r = tonumber(speedValues and speedValues.BodyLockRadius) or tonumber(_G.__ArooshBodyLockRadius) or 60
+		return math.clamp(r, 5, 200)
+	end
+
+	local function getNearestBodyLockTarget()
+		local character = Player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not root then return nil end
+		local nearest, shortest = nil, math.huge
+		local radius = getBodyLockRadius()
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= Player and plr.Character then
+				local tr = plr.Character:FindFirstChild("HumanoidRootPart")
+				local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+				if tr and hum and hum.Health > 0 then
+					local d = (tr.Position - root.Position).Magnitude
+					if d <= radius and d < shortest then
+						shortest = d
+						nearest = plr
+					end
+				end
+			end
+		end
+		return nearest
+	end
+
+	local function stopBodyLock()
+		if bodyLockConn then
+			pcall(function() bodyLockConn:Disconnect() end)
+			bodyLockConn = nil
+		end
+		local hum = Player.Character and Player.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.AutoRotate = true end
+	end
+
+	local function startBodyLock()
+		stopBodyLock()
+		bodyLockConn = RunService.Heartbeat:Connect(function()
+			if not toggleStates["Body Lock"] then return end
+			local character = Player.Character
+			local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			if not myRoot or not humanoid or humanoid.Health <= 0 then return end
+			-- Don't fight bat aimbot rotation ownership
+			if toggleStates["Aimbot"] or toggleStates["Bat V2"] then return end
+
+			local target = getNearestBodyLockTarget()
+			if target and target.Character then
+				local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
+				if targetRoot then
+					local targetPos = targetRoot.Position
+					local myPos = myRoot.Position
+					local offset = Vector3.new(targetPos.X, myPos.Y, targetPos.Z) - myPos
+					if offset.Magnitude > 0.1 then
+						humanoid.AutoRotate = false
+						local lookDir = offset.Unit
+						local currentDir = myRoot.CFrame.LookVector
+						local cross = currentDir:Cross(lookDir)
+						local currentVel = myRoot.AssemblyAngularVelocity
+						myRoot.AssemblyAngularVelocity = Vector3.new(currentVel.X, cross.Y * 40, currentVel.Z)
+					end
+				end
+			else
+				humanoid.AutoRotate = true
+			end
+		end)
+		pcall(function()
+			if _G.__CrystalTrackConn then _G.__CrystalTrackConn(bodyLockConn) end
+		end)
+	end
+
+	FeaturePostToggle["Body Lock"] = function(active)
+		if active then startBodyLock() else stopBodyLock() end
+	end
+
+	_G.__CrystalTrackStopper(stopBodyLock)
+	_G.__CrystalTrackConn(Player.CharacterAdded:Connect(function()
+		if toggleStates["Body Lock"] then
+			task.wait(0.3)
+			startBodyLock()
+		end
+	end))
 	end
 
 	FeaturePostToggle["Unwalk"] = function(active)
@@ -14800,7 +14886,16 @@ local header = Instance.new("Frame")
 	toggleRow(movement, "Unwalk", "Unwalk", toggleStates["Unwalk"], 72, false, function(on)
 	setFeature("Unwalk", on)
 	end)
-	sectionLabel(movement, "TP DOWN", 73)
+	toggleRow(movement, "Body Lock", "Body Lock", toggleStates["Body Lock"], 72, true, function(on)
+	setFeature("Body Lock", on)
+	end)
+	inputRow(movement, "Body Lock Radius", (speedValues and speedValues.BodyLockRadius) or 60, 73, function(value)
+	local n = math.clamp(math.floor(tonumber(value) or 60), 5, 200)
+	if speedValues then speedValues.BodyLockRadius = n end
+	_G.__ArooshBodyLockRadius = n
+	saveConfig()
+	end)
+	sectionLabel(movement, "TP DOWN", 74)
 	actionRow(movement, "TP Down", "TP Down", 74, function()
 	if FeatureToggles["TP Down"] then pcall(FeatureToggles["TP Down"]) end
 	end)
