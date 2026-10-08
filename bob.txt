@@ -5635,12 +5635,12 @@ _G.__CrystalTrackConn(RunService.PostSimulation:Connect(alwaysOnAntiFling))
 	local char = Player.Character
 	if not char then return nil end
 	local equipped = char:FindFirstChildOfClass("Tool")
-	if equipped and equipped.Name:lower():find("bat") then return equipped end
+	if equipped and equipped.Name:lower():find("bat") and not equipped.Name:lower():find("medusa") then return equipped end
 	local bp = Player:FindFirstChild("Backpack")
 	if bp then
 	local hum = char:FindFirstChildOfClass("Humanoid")
 	for _, t in ipairs(bp:GetChildren()) do
-	if t:IsA("Tool") and t.Name:lower():find("bat") then
+	if t:IsA("Tool") and t.Name:lower():find("bat") and not t.Name:lower():find("medusa") and not t.Name:lower():find("stone") then
 	if hum then pcall(function() hum:EquipTool(t) end) end
 	return char:FindFirstChild(t.Name) or t
 	end
@@ -5920,7 +5920,7 @@ if toggleStates["Medusa Counter"] then
 	_G.__CrystalAceNormalAimbot.nextSwingAt = 0
 	_G.__CrystalAceNormalAimbot.swingCooldown = false
 	humanoid.AutoRotate = false
-	local initialBat = char:FindFirstChildOfClass("Tool") or getBat()
+	local initialBat = getBat()
 	if initialBat and initialBat.Parent ~= char then
 	pcall(humanoid.EquipTool, humanoid, initialBat)
 	end
@@ -5934,9 +5934,18 @@ if toggleStates["Medusa Counter"] then
 	if not currentRoot or not currentHumanoid then return end
 	if currentHumanoid.AutoRotate then currentHumanoid.AutoRotate = false end
 
-	local bat = currentChar:FindFirstChildOfClass("Tool") or getBat()
+	local bat = getBat()
+	-- Only bat — never Medusa / other tools
 	if bat and bat.Parent ~= currentChar then
 	pcall(currentHumanoid.EquipTool, currentHumanoid, bat)
+	elseif currentChar:FindFirstChildOfClass("Tool") and not bat then
+	-- don't Activate non-bat tools
+	end
+	if bat then
+	local bn = bat.Name:lower()
+	if bn:find("medusa", 1, true) or bn:find("stone", 1, true) or bn:find("gorgon", 1, true) then
+	bat = nil
+	end
 	end
 
 	local markerCFrame = nil
@@ -6181,7 +6190,11 @@ if toggleStates["Medusa Counter"] then
 	if not currentRoot or not currentHumanoid or currentHumanoid.Health <= 0 then return end
 	currentHumanoid.AutoRotate = false
 	root, humanoid = currentRoot, currentHumanoid
-	bat = currentChar:FindFirstChildOfClass("Tool") or getBat()
+	bat = getBat()
+			if bat then
+				local bn = bat.Name:lower()
+				if bn:find("medusa", 1, true) or bn:find("stone", 1, true) or bn:find("gorgon", 1, true) then bat = nil end
+			end
 	if bat and bat.Parent ~= currentChar then pcall(currentHumanoid.EquipTool, currentHumanoid, bat) end
 
 	-- La marca persistente de TP Bat de Eclipse sustituye completamente a la
@@ -6388,15 +6401,26 @@ if toggleStates["Medusa Counter"] then
 		V2.airborneTime = 0
 	end
 	local function v2GetBat()
+		local function isBatTool(t)
+			if not t or not t:IsA("Tool") then return false end
+			local n = t.Name:lower()
+			if n:find("medusa", 1, true) or n:find("petrif", 1, true) or n:find("gorgon", 1, true) or n:find("stone", 1, true) then
+				return false
+			end
+			return n:find("bat", 1, true) or n:find("slap", 1, true) or n == "bat"
+		end
 		local char = Player.Character
 		if char then
 			local tool = char:FindFirstChildOfClass("Tool")
-			if tool then return tool end
+			if isBatTool(tool) then return tool end
+			for _, t in ipairs(char:GetChildren()) do
+				if isBatTool(t) then return t end
+			end
 		end
 		local backpack = Player:FindFirstChild("Backpack")
 		if backpack then
 			for _, t in ipairs(backpack:GetChildren()) do
-				if t:IsA("Tool") then return t end
+				if isBatTool(t) then return t end
 			end
 		end
 		return nil
@@ -6461,7 +6485,7 @@ if toggleStates["Medusa Counter"] then
 			if not currentRoot or not currentHumanoid or currentHumanoid.Health <= 0 then return end
 			currentHumanoid.AutoRotate = false
 			root, humanoid = currentRoot, currentHumanoid
-			bat = currentChar:FindFirstChildOfClass("Tool") or v2GetBat()
+			bat = v2GetBat()
 			if bat and bat.Parent ~= currentChar then pcall(currentHumanoid.EquipTool, currentHumanoid, bat) end
 			V2.targetPlayer = v2Nearest(root)
 			local targetChar = V2.targetPlayer and V2.targetPlayer.Character
