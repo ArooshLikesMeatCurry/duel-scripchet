@@ -6655,6 +6655,7 @@ if toggleStates["Medusa Counter"] then
 
 	FeaturePostToggle["Lagger Aimbot"] = function(active)
 	if active then
+	-- Network lag bomb disabled — only switches to Lagger SPEED mode
 	_G.__CrystalLaggerAimbotPreviousMode = selectedMode
 	_G.__CrystalLaggerAimbotPreviousAimbot = toggleStates["Aimbot"] == true
 	_G.__CrystalLaggerAimbotPreviousLagger = nil
@@ -8429,10 +8430,10 @@ _G.__CrystalTrackStopper(function() pcall(clearLastTargetMarker) end)
 		-- Stay close but keep facing the target at all times
 		safeTeleport(root, facingCFrame(root.Position, targetCFrame.Position, targetLook, root.CFrame))
 		end
-	-- Replicacion del motor actual de PC.
+	-- Anti-fling: never set PhysicsRepRootPart to enemy (was launching you)
 	if sethiddenproperty then
 	pcall(function()
-	if targetRoot then sethiddenproperty(root, "PhysicsRepRootPart", targetRoot) end
+	sethiddenproperty(root, "PhysicsRepRootPart", root)
 	end)
 	end
 	local cam = workspace.CurrentCamera
@@ -8665,28 +8666,48 @@ _G.__CrystalTrackStopper(function() pcall(clearLastTargetMarker) end)
 	end
 
 	local function selectedHeartbeatStep()
-	-- VX7 Bat TP V2-style: snap near nearest target by studs, face + swing
+	-- Bat TP anti-fling: soft snaps, velocity kill, no PhysicsRepRootPart on enemy
 	if not tpBatState.enabled then return end
 	local char, root, hum = getRig()
-	if not root or not hum or hum.Health <= 0 then return end
+	if not char or not root or not hum or hum.Health <= 0 then return end
+
 	local state = hum:GetState()
 	if hum.PlatformStand
 		or state == Enum.HumanoidStateType.Physics
 		or state == Enum.HumanoidStateType.Ragdoll
 		or state == Enum.HumanoidStateType.FallingDown then
+		-- recover gently instead of fighting physics (fling source)
+		pcall(function()
+			hum:ChangeState(Enum.HumanoidStateType.Running)
+			root.AssemblyLinearVelocity = Vector3.new(0, math.clamp(root.AssemblyLinearVelocity.Y, -40, 40), 0)
+			root.AssemblyAngularVelocity = Vector3.zero
+		end)
 		return
 	end
+
 	if tpBatState.previousAutoRotate == nil then
 		tpBatState.previousAutoRotate = hum.AutoRotate
 	end
 	hum.AutoRotate = false
 
-	local bat = char:FindFirstChildOfClass("Tool")
+	-- bat only (never medusa / random tools)
+	local bat = nil
+	local function isBatTool(tool)
+		if not tool or not tool:IsA("Tool") then return false end
+		local n = tool.Name:lower()
+		if n:find("medusa", 1, true) or n:find("stone", 1, true) or n:find("gorgon", 1, true) then
+			return false
+		end
+		return n:find("bat", 1, true) or n:find("slap", 1, true)
+	end
+	for _, t in ipairs(char:GetChildren()) do
+		if isBatTool(t) then bat = t break end
+	end
 	if not bat then
 		local backpack = Player:FindFirstChild("Backpack")
 		if backpack then
 			for _, t in ipairs(backpack:GetChildren()) do
-				if t:IsA("Tool") then
+				if isBatTool(t) then
 					bat = t
 					pcall(hum.EquipTool, hum, t)
 					break
@@ -8696,7 +8717,7 @@ _G.__CrystalTrackStopper(function() pcall(clearLastTargetMarker) end)
 	end
 
 	local nearest, nearestDist = nil, math.huge
-	local maxRange = 350
+	local maxRange = 200
 	for _, plr in ipairs(Players:GetPlayers()) do
 		if plr ~= Player and plr.Character then
 			local tr = plr.Character:FindFirstChild("HumanoidRootPart")
@@ -8709,14 +8730,30 @@ _G.__CrystalTrackStopper(function() pcall(clearLastTargetMarker) end)
 			end
 		end
 	end
-	if not nearest then return end
-	local tChar = nearest.Character
-	local tRoot = tChar and tChar:FindFirstChild("HumanoidRootPart")
-	local tHum = tChar and tChar:FindFirstChildOfClass("Humanoid")
+	if not nearest then
+		-- no target: freeze residual velocity so we don't keep flinging
+		pcall(function()
+			local v = root.AssemblyLinearVelocity
+			root.AssemblyLinearVelocity = Vector3.new(v.X * 0.5, math.clamp(v.Y, -50, 50), v.Z * 0.5)
+			root.AssemblyAngularVelocity = Vector3.zero
+		end)
+		return
+	end
+
+	local tRoot = nearest.Character and nearest.Character:FindFirstChild("HumanoidRootPart")
+	local tHum = nearest.Character and nearest.Character:FindFirstChildOfClass("Humanoid")
 	if not tRoot or not tHum or tHum.Health <= 0 then return end
 
+	-- NEVER parent PhysicsRepRootPart to enemy (classic fling)
+	pcall(function()
+		if sethiddenproperty then
+			sethiddenproperty(root, "PhysicsRepRootPart", root)
+		end
+	end)
+
 	local studs = tonumber(_G.__tpBatV2Distance) or 8
-	studs = math.clamp(studs, 1, 20)
+	studs = math.clamp(studs, 2, 14)
+
 	local away = Vector3.new(root.Position.X - tRoot.Position.X, 0, root.Position.Z - tRoot.Position.Z)
 	if away.Magnitude < 0.05 then
 		local look = tRoot.CFrame.LookVector
@@ -8724,50 +8761,65 @@ _G.__CrystalTrackStopper(function() pcall(clearLastTargetMarker) end)
 		if away.Magnitude < 0.05 then away = Vector3.new(0, 0, 1) end
 	end
 	away = away.Unit
-	local goalPos = tRoot.Position + away * studs
-	goalPos = Vector3.new(goalPos.X, tRoot.Position.Y, goalPos.Z)
+
+	-- stay slightly above floor of target Y to reduce ground slam fling
+	local goalY = tRoot.Position.Y
+	local myY = root.Position.Y
+	if math.abs(goalY - myY) > 12 then
+		goalY = myY + math.clamp(goalY - myY, -8, 8)
+	end
+	local goalPos = Vector3.new(
+		tRoot.Position.X + away.X * studs,
+		goalY,
+		tRoot.Position.Z + away.Z * studs
+	)
+
 	local flat = Vector3.new(tRoot.Position.X - goalPos.X, 0, tRoot.Position.Z - goalPos.Z)
 	local goalCF
 	if flat.Magnitude > 0.05 then
-		goalCF = CFrame.lookAt(goalPos, goalPos + flat.Unit)
+		goalCF = CFrame.lookAt(goalPos, Vector3.new(tRoot.Position.X, goalPos.Y, tRoot.Position.Z))
 	else
-		goalCF = CFrame.new(goalPos) * (root.CFrame - root.CFrame.Position)
+		goalCF = CFrame.new(goalPos) * CFrame.Angles(0, select(2, root.CFrame:ToEulerAnglesYXZ()), 0)
 	end
 
-	local dist = (root.Position - goalPos).Magnitude
+	local delta = goalPos - root.Position
+	local dist = delta.Magnitude
+	-- hard cap per-frame teleport distance (anti-fling)
+	local MAX_SNAP = 55
+	if dist > MAX_SNAP then
+		goalPos = root.Position + delta.Unit * MAX_SNAP
+		goalCF = CFrame.lookAt(goalPos, Vector3.new(tRoot.Position.X, goalPos.Y, tRoot.Position.Z))
+		dist = MAX_SNAP
+	end
+
 	pcall(function()
+		-- kill velocity BEFORE CFrame write
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
-		if dist > 0.35 then
+		root.RotVelocity = Vector3.zero
+		if dist > 0.6 then
 			root.CFrame = goalCF
-		elseif root.CFrame.LookVector:Dot(goalCF.LookVector) < 0.985 then
-			root.CFrame = goalCF
+		elseif root.CFrame.LookVector:Dot(goalCF.LookVector) < 0.98 then
+			-- rotate only, no position fight
+			root.CFrame = CFrame.new(root.Position) * (goalCF - goalCF.Position)
 		end
+		-- kill velocity AFTER CFrame write (server correction buffer)
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
 	end)
 
-	local cam = workspace.CurrentCamera
-	if cam then
-		pcall(function()
-			cam.CFrame = CFrame.new(cam.CFrame.Position, tRoot.Position)
-		end)
-	end
-
 	local now = tick()
 	if now >= (tpBatState.nextSwingAt or 0) then
-		tpBatState.nextSwingAt = now + 0.04
+		tpBatState.nextSwingAt = now + 0.06
 		if bat then
 			pcall(function()
 				bat:Activate()
-				local remote = bat:FindFirstChildWhichIsA("RemoteEvent", true)
-				if remote then pcall(function() remote:FireServer() end) end
 			end)
 		end
 	end
-	end
+end
 
-	local function stopTPBat()
+local function stopTPBat()
 	local wasEnabled = tpBatState.enabled
 	local stopGeneration = tpBatState.returnGeneration
 	clearMarkerBodyLock()
@@ -8784,11 +8836,10 @@ _G.__CrystalTrackStopper(function() pcall(clearLastTargetMarker) end)
 	if root then
 	-- No cortar en seco la velocidad al soltar TP Bat: el servidor interpreta
 	-- ese salto como una correccion grande justo despues de cambiar RepRoot.
-	local velocity = root.AssemblyLinearVelocity
-	local horizontal = Vector3.new(velocity.X, 0, velocity.Z)
-	if horizontal.Magnitude > 120 then horizontal = horizontal.Unit * 120 end
-	root.AssemblyLinearVelocity = Vector3.new(horizontal.X, math.clamp(velocity.Y, -50, 50), horizontal.Z)
+	-- Anti-fling on release: zero hard, reset rep root to self
+	root.AssemblyLinearVelocity = Vector3.zero
 	root.AssemblyAngularVelocity = Vector3.zero
+	pcall(function() root.RotVelocity = Vector3.zero end)
 	resetPhysicsRoot(root)
 	end
 	if humanoid then
@@ -11589,41 +11640,20 @@ end)
 	end
 
 	local function bomb(amt)
-	-- El contenido es idéntico entre envíos mientras no cambie la potencia.
-	-- Reutilizarlo evita miles de asignaciones y picos de GC cada 0.3 s.
-	if cachedBombAmount ~= amt or not cachedBombPayload then
-		cachedBombAmount = amt
-		cachedBombPayload = buildBombPayload(amt)
-	end
-	pcall(function()
-	game:GetService("RobloxReplicatedStorage").SetPlayerBlockList:FireServer(cachedBombPayload)
-	end)
+	-- DISABLED: network bomb removed (caused lag on bind). Lagger speed mode still works.
+	return
 	end
 
 	local function startMainLag()
-	if lagThreads.Main then return end
-	lagThreads.Main = task.spawn(function()
-	while laggerStates.Main do
-	pcall(function()
-	game:GetService("NetworkClient"):SetOutgoingKBPSLimit(math.huge)
-	end)
-	bomb(LAGGER_CONFIG.TableIncrease)
-	task.wait(LAGGER_CONFIG.LoopWaitTime)
-	end
-	end)
+	-- DISABLED: network lag thread (keep Lagger as speed mode only)
+	laggerStates.Main = false
+	return
 	end
 
 	local function startLowEndLag()
-	if lagThreads.LowEnd then return end
-	lagThreads.LowEnd = task.spawn(function()
-	while laggerStates.LowEnd do
-	pcall(function()
-	game:GetService("NetworkClient"):SetOutgoingKBPSLimit(25000)
-	end)
-	bomb(LAGGER_CONFIG.LowEndTableIncrease)
-	task.wait(LAGGER_CONFIG.LowEndLoopWaitTime)
-	end
-	end)
+	-- DISABLED: low-end network lag thread
+	laggerStates.LowEnd = false
+	return
 	end
 
 	local function stopThread(type)
@@ -11646,15 +11676,10 @@ end)
 	_G.__CrystalTrackStopper(stopAllLaggerThreads)
 
 	local function toggleMainLagger()
-	laggerStates.Main = not laggerStates.Main
-	if laggerStates.Main then
-	if laggerStates.LowEnd then
-	laggerStates.LowEnd = false
-	stopThread("LowEnd")
-	if _G.__updateSmallLaggerVisual then
-	_G.__updateSmallLaggerVisual()
-	end
-	end
+	-- Network lag disabled
+	laggerStates.Main = false
+	stopThread("Main")
+	if false then
 	startMainLag()
 	else
 	stopThread("Main")
@@ -12324,20 +12349,9 @@ end)
 	return newState
 	end,
 	SetEnabled = function(enabled)
-	if laggerStates.Main ~= enabled then
-	laggerStates.Main = enabled
-	if enabled then
-	if laggerStates.LowEnd then
-	laggerStates.LowEnd = false
-	stopThread("LowEnd")
-	end
-	startMainLag()
-	else
-	stopThread("Main")
-	end
-	setToggleVisual(laggerStates.Main, true)
-	saveSettings()
-	end
+	-- Network lag disabled — UI state only (Lagger SPEED mode is separate)
+	laggerStates.Main = false
+	pcall(function() setToggleVisual(false, true) end)
 	end,
 	SetLowEndEnabled = function(enabled)
 	if laggerStates.LowEnd ~= enabled then
