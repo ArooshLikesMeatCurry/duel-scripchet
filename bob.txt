@@ -974,12 +974,12 @@ print("[Aroosh] Intro loaded · BANGLADESH ON TOP")
 	end
 
 	local speedValues = {
-	NormalBoost = 59,
-	NormalSteal = 29,
-	LaggerBoost = 40,
-	LaggerSteal = 20,
-	DesyncBoost = 59,
-	DesyncSteal = 29,
+	NormalBoost = 68,
+	NormalSteal = 34,
+	LaggerBoost = 48,
+	LaggerSteal = 24,
+	DesyncBoost = 72,
+	DesyncSteal = 36,
 	BypassPower = 300000,
 	BypassDepth = 296,
 	MobileButtonScale = 1.0,
@@ -3038,8 +3038,8 @@ if toggleStates["Anti Ragdoll"] then startAntiRagdoll() end
 
 	-- ==================== SPEED BOOST ====================
 	do
-	-- Metodo general de velocidad de Zurich: impulso horizontal directo en cada
-	-- RenderStepped, Y nativa intacta y lectura externa limitada a 20.
+	-- Adapt + Zurich hybrid speed: velocity blend, double-write, RS+Heartbeat
+	-- Y nativa intacta, S2 spoof lectura externa limitada a 20.
 	local oldSpeedState = _G.__CrystalSpeedSpoofState
 	if type(oldSpeedState) == "table" then oldSpeedState.enabled = false end
 	local s2State = _G.__CrystalS2SpeedState
@@ -3117,18 +3117,25 @@ if toggleStates["Anti Ragdoll"] then startAntiRagdoll() end
 	end)
 	local function stopSpeedBoost()
 		if _G.__speedBoostConn then _G.__speedBoostConn:Disconnect(); _G.__speedBoostConn = nil end
+		if _G.__speedBoostHBConn then _G.__speedBoostHBConn:Disconnect(); _G.__speedBoostHBConn = nil end
 		resetSpeedMovement()
 	end
+	-- Adapt + Zurich hybrid: hard velocity write + blend vs server pullback
+	local _speedBlend = Vector3.zero
+	local _lastSpeedWrite = 0
 	local function applyVelocitySpeed(direction, speed)
 		local character = Player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		local root = character and character:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not root or humanoid.Health <= 0 then return end
 		if type(speed) ~= "number" or speed ~= speed or speed <= 0 or speed == math.huge then return end
+		-- slight headroom so server clamps feel less sticky
+		speed = math.clamp(speed * 1.08, 1, 200)
 
 		local verticalVelocity = root.AssemblyLinearVelocity.Y
 		if _G._ZurichHub_MovementBlocked == true or _G._CrystalHub_MovementBlocked == true then
 			root.AssemblyLinearVelocity = Vector3.new(0, math.min(verticalVelocity, 0), 0)
+			_speedBlend = Vector3.zero
 			return
 		end
 		if direction and direction.Magnitude > 0.05 then
@@ -3136,21 +3143,38 @@ if toggleStates["Anti Ragdoll"] then startAntiRagdoll() end
 				if root.SetNetworkOwner then root:SetNetworkOwner(Player) end
 			end)
 			local unit = direction.Unit
-			root.AssemblyLinearVelocity = Vector3.new(unit.X * speed, verticalVelocity, unit.Z * speed)
+			local target = Vector3.new(unit.X * speed, 0, unit.Z * speed)
+			-- blend against current flat vel so rubberband snaps less
+			local cur = root.AssemblyLinearVelocity
+			local curFlat = Vector3.new(cur.X, 0, cur.Z)
+			local blended = curFlat:Lerp(target, 0.92)
+			if blended.Magnitude < speed * 0.85 then
+				blended = target -- force full when server is killing speed
+			end
+			_speedBlend = blended
+			local vy = verticalVelocity
+			-- preserve jump/fall, don't let server Y dominate while moving
+			if math.abs(vy) < 2 then vy = cur.Y end
+			local final = Vector3.new(blended.X, vy, blended.Z)
+			root.AssemblyLinearVelocity = final
+			-- second write same frame (Adapt-style anti desync)
+			pcall(function()
+				root.AssemblyLinearVelocity = final
+			end)
+			_lastSpeedWrite = tick()
 		else
-			root.AssemblyLinearVelocity = Vector3.new(0, verticalVelocity, 0)
+			local cur = root.AssemblyLinearVelocity
+			root.AssemblyLinearVelocity = Vector3.new(0, cur.Y, 0)
+			_speedBlend = Vector3.zero
 		end
 	end
-	local function startSpeedBoost()
-		stopSpeedBoost()
-		_G.__speedBoostConn = RunService.RenderStepped:Connect(function()
+	local function speedBoostStep()
 			if not toggleStates["Speed Boost"] then return end
 			local character = Player.Character
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			local root = character and character:FindFirstChild("HumanoidRootPart")
 			if not humanoid or not root or humanoid.Health <= 0 then return end
 			-- Autoplay, TP Bat y los aimbots son dueños directos de la velocidad.
-			-- El motor general no debe sobrescribirlos desde RenderStepped.
 			if toggleStates["Autoplay"] or toggleStates["TP Bat"]
 				or toggleStates["Aimbot"] or toggleStates["Bat V2"] or toggleStates["Lagger Aimbot"]
 				or _G.dropActive or _G.IsDropping then
@@ -3181,7 +3205,12 @@ if toggleStates["Anti Ragdoll"] then startAntiRagdoll() end
 			end
 			local selectedSpeed = getTargetSpeed(Player:GetAttribute("Stealing") == true)
 			applyVelocitySpeed(direction, tonumber(selectedSpeed) or 16)
-		end)
+		end
+	local function startSpeedBoost()
+		stopSpeedBoost()
+		-- RenderStepped + Heartbeat: Adapt-style double clock for high ping hold
+		_G.__speedBoostConn = RunService.RenderStepped:Connect(speedBoostStep)
+		_G.__speedBoostHBConn = RunService.Heartbeat:Connect(speedBoostStep)
 	end
 	local function applySpeedBoostNow()
 		if not toggleStates["Speed Boost"] then return end
