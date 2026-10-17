@@ -6289,14 +6289,31 @@ if toggleStates["Medusa Counter"] then
 	Z.airborneTime = 0
 	Z.lastYVelocity = 0
 	end
+	local function getEspTrackPart(character)
+	if not character then return nil end
+	return character:FindFirstChild("HumanoidRootPart")
+		or character.PrimaryPart
+		or character:FindFirstChild("UpperTorso")
+		or character:FindFirstChild("Torso")
+		or character:FindFirstChild("Head")
+	end
 	local function nearestZurichTarget(root)
+	local visual = nil
+	pcall(function()
+		if _G.__CrystalGetVisualEnemy then visual = _G.__CrystalGetVisualEnemy() end
+	end)
+	if visual and visual ~= Player and visual.Parent == Players and visual.Character then
+		local hum = visual.Character:FindFirstChildOfClass("Humanoid")
+		local part = getEspTrackPart(visual.Character)
+		if part and hum and hum.Health > 0 then return visual end
+	end
 	local nearest, nearestDistance = nil, math.huge
 	for _, candidate in ipairs(Players:GetPlayers()) do
 	if candidate ~= Player and candidate.Character then
-	local targetRoot = candidate.Character:FindFirstChild("HumanoidRootPart")
 	local targetHumanoid = candidate.Character:FindFirstChildOfClass("Humanoid")
-	if targetRoot and targetHumanoid and targetHumanoid.Health > 0 then
-	local distance = (root.Position - targetRoot.Position).Magnitude
+	local trackPart = getEspTrackPart(candidate.Character)
+	if trackPart and targetHumanoid and targetHumanoid.Health > 0 then
+	local distance = (root.Position - trackPart.Position).Magnitude
 	if distance < nearestDistance then nearest, nearestDistance = candidate, distance end
 	end
 	end
@@ -7830,7 +7847,7 @@ if toggleStates["ESP Players"] then enableESP() end
 
 	do
 if false then
-local tpBatRow = makeToggle(combatSection, "TP Bat", "TP Bat", function(extension)
+local tpBatRow = makeToggle(combatSection, "H/Jeu", "TP Bat", function(extension)
 local container = extension.Parent
 local card = container and container:FindFirstChildOfClass("TextButton")
 if not card then return 28 end
@@ -7918,7 +7935,7 @@ local distanceLabel = Instance.new("TextLabel", distancePanel)
 distanceLabel.Size = UDim2.new(1, -92, 0, 38)
 distanceLabel.Position = UDim2.new(0, 10, 0, 0)
 distanceLabel.BackgroundTransparency = 1
-distanceLabel.Text = "DISTANCIA TP (STUDS)"
+distanceLabel.Text = "H/JEU DISTANCE (STUDS)"
 distanceLabel.TextColor3 = Color3.fromRGB(190, 210, 238)
 distanceLabel.Font = Enum.Font.GothamBold
 distanceLabel.TextSize = 10
@@ -7950,7 +7967,7 @@ local versionInsideLabel = Instance.new("TextLabel", distancePanel)
 versionInsideLabel.Size = UDim2.new(1, -92, 0, 34)
 versionInsideLabel.Position = UDim2.new(0, 10, 0, 40)
 versionInsideLabel.BackgroundTransparency = 1
-versionInsideLabel.Text = "VERSION TP BAT"
+versionInsideLabel.Text = "VERSION H/JEU"
 versionInsideLabel.TextColor3 = Color3.fromRGB(190, 210, 238)
 versionInsideLabel.Font = Enum.Font.GothamBold
 versionInsideLabel.TextSize = 10
@@ -8289,6 +8306,21 @@ end
 
 _G.__CrystalTPBatTrackTarget = function(player)
 if tpBatState.markerLocked then return tpBatState.markerTarget end
+-- H/Jeu: prefer RIVAL / ESP visual enemy when valid
+do
+	local visual = nil
+	pcall(function()
+		if _G.__CrystalGetVisualEnemy then visual = _G.__CrystalGetVisualEnemy() end
+	end)
+	if visual and visual.Parent == Players and visual ~= Player and visual.Character then
+		local hum = visual.Character:FindFirstChildOfClass("Humanoid")
+		local root = visual.Character:FindFirstChild("HumanoidRootPart")
+		if root and hum and hum.Health > 0 then
+			tpBatState.markerTarget = visual
+			return visual
+		end
+	end
+end
 -- Conserva el mismo rival mientras siga vivo. Sin este bloqueo, Aimbot podia
 -- cambiar al siguiente jugador cercano en el mismo frame en que el anterior
 -- salia del mapa, antes de que el monitor alcanzara a crear la bola.
@@ -11008,7 +11040,7 @@ end)
 
 	local aimbotButton, aimbotStroke = makeQuickButton("AIMBOT", 1)
 	local batV2Button, batV2Stroke = makeQuickButton("BAT V2", 2)
-	local autoBatButton, autoBatStroke = makeQuickButton("BAT TP", 3)
+	local autoBatButton, autoBatStroke = makeQuickButton("H/JEU", 3)
 	local tpDownButton, tpDownStroke = makeQuickButton("TP DOWN", 4)
 	local dropButton, dropStroke = makeQuickButton("DROP", 5)
 	local carrySpeedButton, carrySpeedStroke = makeQuickButton("CARRY SPEED", 6)
@@ -15144,8 +15176,20 @@ local function inputRow(parent, labelText, value, order, callback, bindFeatureNa
 	row.LayoutOrder = order
 	row.Parent = parent
 	corner(row, 14); stroke(row, C.divider, 1)
+
+	local current = tonumber(value) or 0
+	local btnW = isMobile and 20 or 22
+	local boxW = isMobile and 46 or 54
+	local gap = 4
+	local rightPad = isMobile and 6 or 8
+	-- right side: [ - ] [ box ] [ + ]
+	local plusX = -(rightPad + btnW)
+	local boxX = plusX - gap - boxW
+	local minusX = boxX - gap - btnW
+	local controlWidth = (btnW * 2) + boxW + (gap * 2) + rightPad + 4
+
 	local label = keepOriginalText(Instance.new("TextLabel"))
-	label.Size = bindFeatureName and UDim2.new(1, isMobile and -116 or -142, 1, 0) or UDim2.new(0.65, 0, 1, 0)
+	label.Size = UDim2.new(1, -controlWidth - (bindFeatureName and (isMobile and 36 or 42) or 4), 1, 0)
 	label.Position = UDim2.new(0, isMobile and 8 or 12, 0, 0)
 	label.BackgroundTransparency = 1
 	label.Text = labelText
@@ -15153,18 +15197,23 @@ local function inputRow(parent, labelText, value, order, callback, bindFeatureNa
 	label.TextSize = MODERN.textSize
 	label.Font = Enum.Font.GothamBold
 	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.ZIndex = 2
 	label.Parent = row
+
 	if bindFeatureName then
-	inlineModeBind(row, bindFeatureName, UDim2.new(1, isMobile and -94 or -116, 0.5, isMobile and -8 or -10))
+		inlineModeBind(row, bindFeatureName, UDim2.new(1, minusX - (isMobile and 30 or 36), 0.5, isMobile and -8 or -10))
 	end
+
 	local boxFrame = Instance.new("Frame")
-	boxFrame.Size = UDim2.new(0, isMobile and 44 or 54, 0, isMobile and 18 or 22)
-	boxFrame.Position = UDim2.new(1, isMobile and -51 or -64, 0.5, isMobile and -9 or -11)
+	boxFrame.Size = UDim2.new(0, boxW, 0, isMobile and 20 or 24)
+	boxFrame.Position = UDim2.new(1, boxX, 0.5, isMobile and -10 or -12)
 	boxFrame.BackgroundColor3 = C.row
 	boxFrame.BackgroundTransparency = 0.15
 	boxFrame.BorderSizePixel = 0
+	boxFrame.ZIndex = 5
 	boxFrame.Parent = row
 	corner(boxFrame, 6); stroke(boxFrame, Color3.fromRGB(55, 55, 60), 1)
+
 	local box = keepOriginalText(Instance.new("TextBox"))
 	box.Size = UDim2.new(1, 0, 1, 0)
 	box.BackgroundTransparency = 1
@@ -15173,19 +15222,77 @@ local function inputRow(parent, labelText, value, order, callback, bindFeatureNa
 	box.TextSize = isMobile and 9 or 11
 	box.Font = Enum.Font.GothamBold
 	box.ClearTextOnFocus = false
+	box.ZIndex = 6
 	box.Parent = boxFrame
+
+	local function setNum(n)
+		n = tonumber(n)
+		if not n then return end
+		-- keep 2 decimal places without depending on roundDecimal
+		n = math.floor(n * 100 + 0.5) / 100
+		current = n
+		local ok, err = pcall(function() callback(n) end)
+		if not ok then warn("[Aroosh] inputRow callback:", err) end
+		box.Text = formatNumber(n, 2)
+	end
+
+	local function stepFor(n)
+		n = math.abs(tonumber(n) or 0)
+		if n < 5 then return 0.1 end
+		if n < 40 then return 0.5 end
+		return 1
+	end
+
+	local function makeStepBtn(text, xOffset)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(0, btnW, 0, isMobile and 20 or 24)
+		b.Position = UDim2.new(1, xOffset, 0.5, isMobile and -10 or -12)
+		b.BackgroundColor3 = C.bgDark
+		b.BackgroundTransparency = 0.05
+		b.BorderSizePixel = 0
+		b.Text = text
+		b.TextColor3 = C.accent
+		b.TextSize = isMobile and 13 or 15
+		b.Font = Enum.Font.GothamBlack
+		b.AutoButtonColor = true
+		b.Active = true
+		b.Selectable = true
+		b.ZIndex = 8
+		b.Parent = row
+		corner(b, 6); stroke(b, Color3.fromRGB(55, 55, 60), 1)
+		return b
+	end
+
+	local minusBtn = makeStepBtn("-", minusX)
+	local plusBtn = makeStepBtn("+", plusX)
+
+	local function onMinus()
+		local cur = tonumber(box.Text) or current
+		setNum(cur - stepFor(cur))
+	end
+	local function onPlus()
+		local cur = tonumber(box.Text) or current
+		setNum(cur + stepFor(cur))
+	end
+
+	minusBtn.MouseButton1Click:Connect(onMinus)
+	plusBtn.MouseButton1Click:Connect(onPlus)
+	minusBtn.Activated:Connect(onMinus)
+	plusBtn.Activated:Connect(onPlus)
+
 	box.FocusLost:Connect(function()
-	local number = tonumber(box.Text)
-	if number then
-		callback(number)
-		box.Text = formatNumber(number, 2)
-	else
-		box.Text = formatNumber(value, 2)
-	end
+		local number = tonumber(box.Text)
+		if number then
+			setNum(number)
+		else
+			box.Text = formatNumber(current, 2)
+		end
 	end)
+
 	return row
-	end
-	local function customSpeedRow(parent, customSpeed, order)
+end
+
+local function customSpeedRow(parent, customSpeed, order)
 	local row = Instance.new("Frame")
 	row.Name = "CustomSpeed_" .. customSpeed.name
 	row.Size = UDim2.new(1, 0, 0, 58)
@@ -15672,8 +15779,8 @@ local function inputRow(parent, labelText, value, order, callback, bindFeatureNa
 	toggleRow(combat, "Anti Ragdoll", "Anti Ragdoll", toggleStates["Anti Ragdoll"], 9, false, function(on) setFeature("Anti Ragdoll", on) end)
 	toggleRow(combat, "Medusa Counter", "Medusa Counter", toggleStates["Medusa Counter"], 10, false, function(on) setFeature("Medusa Counter", on) end)
 	toggleRow(combat, "Anti Die", "Anti Die", toggleStates["Anti Die"], 11, false, function(on) setFeature("Anti Die", on) end)
-	sectionLabel(combat, "TP BAT", 12)
-	-- TP Bat usa un bind horizontal propio; no crear el bind inferior generico.
+	sectionLabel(combat, "H/JEU", 12)
+	-- H/Jeu usa un bind horizontal propio; no crear el bind inferior generico.
 	local _, tpBatUiRow = toggleRow(combat, "TP Bat", "TP Bat", toggleStates["TP Bat"], 13, false, function(on) setFeature("TP Bat", on) end)
 	tpBatUiRow.ClipsDescendants = true
 
@@ -15777,8 +15884,8 @@ local function inputRow(parent, labelText, value, order, callback, bindFeatureNa
 	label.Parent = tpBatConfigPanel
 	return label
 	end
-	tpBatConfigText("DISTANCIA TP (STUDS)", 2)
-	tpBatConfigText("VERSION TP BAT", 40)
+	tpBatConfigText("H/JEU DISTANCE (STUDS)", 2)
+	tpBatConfigText("VERSION H/JEU", 40)
 
 	local tpBatDistanceBox = keepOriginalText(Instance.new("TextBox"))
 	tpBatDistanceBox.Size = UDim2.new(0, 72, 0, 26)
