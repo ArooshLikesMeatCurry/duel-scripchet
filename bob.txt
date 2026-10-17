@@ -1470,28 +1470,91 @@ end
 	and input.KeyCode == Enum.KeyCode.RightControl
 	end
 
+	-- ============================================================
+	-- MOUSE BINDS (Logitech MX Master 2S side buttons included)
+	-- Roblox maps:
+	--   MouseButton2 = right
+	--   MouseButton3 = middle
+	--   MouseButton4 = X1 / back  (MX Master thumb "Back")
+	--   MouseButton5 = X2 / fwd   (MX Master thumb "Forward")
+	-- Logi Options+ can also remap side buttons to keyboard keys
+	-- (BrowserBack / BrowserForward / F13-F24). Those are accepted too.
+	-- Left click (MouseButton1) is NOT bindable — clears bind / UI.
+	-- ============================================================
 	local mouseButtonMap = {}
 	local mouseButtonDisplay = {
-	["MB3"] = "Mouse3",
+		["MB2"] = "Mouse2",
+		["MB3"] = "Mouse3",
+		["MB4"] = "Mouse4",
+		["MB5"] = "Mouse5",
 	}
-	pcall(function() mouseButtonMap[Enum.UserInputType.MouseButton3] = "MB3" end)
+	-- Extra keyboard keys Logitech / OS often maps side buttons to
+	local extraKeyDisplay = {}
+	pcall(function()
+		extraKeyDisplay[Enum.KeyCode.BrowserBack] = "MBack"
+		extraKeyDisplay[Enum.KeyCode.BrowserForward] = "MFwd"
+	end)
+	pcall(function()
+		extraKeyDisplay[Enum.KeyCode.BrowserHome] = "MHome"
+	end)
+	-- Some drivers emit F13–F24 for programmable buttons
+	for i = 13, 24 do
+		local ok, kc = pcall(function() return Enum.KeyCode["F" .. i] end)
+		if ok and kc then
+			extraKeyDisplay[kc] = "F" .. i
+		end
+	end
+	pcall(function()
+		mouseButtonMap[Enum.UserInputType.MouseButton2] = "MB2"
+		mouseButtonMap[Enum.UserInputType.MouseButton3] = "MB3"
+	end)
+	pcall(function()
+		local mb4 = Enum.UserInputType.MouseButton4
+		if mb4 then mouseButtonMap[mb4] = "MB4" end
+	end)
+	pcall(function()
+		local mb5 = Enum.UserInputType.MouseButton5
+		if mb5 then mouseButtonMap[mb5] = "MB5" end
+	end)
+
 	local function isMouseSideButton(input)
-	return input and mouseButtonMap[input.UserInputType] ~= nil
+		if not input then return false end
+		if mouseButtonMap[input.UserInputType] then return true end
+		return false
 	end
 	local function getMouseButtonBind(input)
-	return mouseButtonMap[input.UserInputType]
+		if not input then return nil end
+		return mouseButtonMap[input.UserInputType]
+	end
+	local function isExtraMouseKey(input)
+		if not input then return false end
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then return false end
+		if not input.KeyCode or input.KeyCode == Enum.KeyCode.Unknown then return false end
+		return extraKeyDisplay[input.KeyCode] ~= nil
+	end
+	local function getExtraMouseKeyBind(input)
+		if not input or not input.KeyCode then return nil end
+		return input.KeyCode -- store as KeyCode enum like normal keys
 	end
 
 	local function keybindDisplayName(key)
-	if not key then return "-" end
-	if type(key) == "string" then return mouseButtonDisplay[key] or key end
-	return tostring(key):match("KeyCode%.(.+)") or tostring(key)
+		if not key then return "-" end
+		if type(key) == "string" then
+			return mouseButtonDisplay[key] or key
+		end
+		if extraKeyDisplay[key] then
+			return extraKeyDisplay[key]
+		end
+		return tostring(key):match("KeyCode%.(.+)") or tostring(key)
 	end
+
 
 	local toggleDefaults = {}
 	toggleDefaults["Inf Jump"] = false
 	toggleDefaults["Anti Bat"] = false
 	toggleDefaults["Body Lock"] = false
+	toggleDefaults["Spinbot"] = false
+	toggleDefaults["Force Spinbot"] = false
 	toggleDefaults["TP Down"] = false
 	toggleDefaults["Auto TP Down"] = false
 	toggleDefaults["Anti Ragdoll"] = false
@@ -3062,8 +3125,91 @@ if toggleStates["Anti Ragdoll"] then startAntiRagdoll() end
 		if toggleStates["Body Lock"] then startBodyLock() end
 	end))
 	if toggleStates["Body Lock"] then startBodyLock() end
+
+	-- ==================== SPINBOT ====================
+	local spinbotConn = nil
+	local function stopSpinbot()
+		if spinbotConn then
+			pcall(function() spinbotConn:Disconnect() end)
+			spinbotConn = nil
+		end
+		local c = Player.Character
+		local root = c and c:FindFirstChild("HumanoidRootPart")
+		if root then
+			pcall(function() root.AssemblyAngularVelocity = Vector3.zero end)
+		end
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function() hum.AutoRotate = true end)
+		end
+	end
+	local function startSpinbot()
+		stopSpinbot()
+		spinbotConn = RunService.Heartbeat:Connect(function(dt)
+			if not toggleStates["Spinbot"] then return end
+			-- Without Force Spinbot, yield to body lock / bat systems
+			if not toggleStates["Force Spinbot"] then
+				if toggleStates["Body Lock"] or toggleStates["Aimbot"] or toggleStates["Bat V2"] or toggleStates["TP Bat"] then
+					return
+				end
+			end
+			local char = Player.Character
+			if not char then return end
+			local root = char:FindFirstChild("HumanoidRootPart")
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if not root or not hum then return end
+			if hum.AutoRotate then hum.AutoRotate = false end
+			local spd = math.clamp(tonumber(speedValues.SpinbotSpeed) or 25, 1, 120)
+			if toggleStates["Force Spinbot"] then
+				-- CFrame yaw so it still shows while aimbot/bodylock steer the root
+				local yaw = math.rad(spd * 18 * (dt or 0.016))
+				root.CFrame = root.CFrame * CFrame.Angles(0, yaw, 0)
+			else
+				root.AssemblyAngularVelocity = Vector3.new(0, spd * 2.8, 0)
+			end
+		end)
+	end
+	_G.__CrystalTrackStopper(stopSpinbot)
+	FeaturePostToggle["Spinbot"] = function(active)
+		if active then startSpinbot() else stopSpinbot() end
+	end
+	_G.__CrystalTrackConn(Player.CharacterAdded:Connect(function()
+		task.wait(0.4)
+		if toggleStates["Spinbot"] then startSpinbot() end
+	end))
+	if toggleStates["Spinbot"] then startSpinbot() end
+
 	end
 
+	-- ==================== ANTI CAMERA SHAKE ====================
+	-- Always on: kills Humanoid.CameraOffset shake from hits / tools / game
+	do
+		local antiShakeConn = nil
+		local function stopAntiShake()
+			if antiShakeConn then
+				pcall(function() antiShakeConn:Disconnect() end)
+				antiShakeConn = nil
+			end
+		end
+		local function startAntiShake()
+			stopAntiShake()
+			antiShakeConn = RunService.RenderStepped:Connect(function()
+				local char = Player.Character
+				if not char then return end
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				if not hum then return end
+				if hum.CameraOffset.Magnitude > 0.001 then
+					hum.CameraOffset = Vector3.zero
+				end
+			end)
+		end
+		_G.__CrystalTrackStopper(stopAntiShake)
+		startAntiShake()
+		_G.__CrystalTrackConn(Player.CharacterAdded:Connect(function()
+			task.wait(0.2)
+			startAntiShake()
+		end))
+	end
 
 	local function getSelectedStealSpeed()
 	if toggleStates["Autoplay"] == true then
@@ -7767,6 +7913,10 @@ if toggleStates["ESP Players"] then enableESP() end
 	makeToggleNoKeybind(movementSection, "Unwalk", "Unwalk")
 	local bodyLockRow = makeToggle(movementSection, "Body Lock", "Body Lock")
 	pcall(function() styleSmallToggle(bodyLockRow) end)
+	local spinbotRow = makeToggle(movementSection, "Spinbot", "Spinbot")
+	pcall(function() styleSmallToggle(spinbotRow) end)
+	local forceSpinbotRow = makeToggleNoKeybind(movementSection, "Force Spinbot", "Force Spinbot")
+	pcall(function() styleSmallToggle(forceSpinbotRow) end)
 	local infJumpToggleRow = makeToggleNoKeybind(movementSection, "Inf Jump", "Inf Jump")
 	if infJumpToggleRow then
 	local infJumpModeBtn = Instance.new("TextButton", infJumpToggleRow)
@@ -13716,11 +13866,27 @@ end)
 
 	local function isValidBindInput(input)
 	local t = input.UserInputType
-	return t == Enum.UserInputType.Keyboard or t == Enum.UserInputType.MouseButton3 or GAMEPAD_TYPES[t] == true
+	if t == Enum.UserInputType.Keyboard then return true end
+	if GAMEPAD_TYPES[t] == true then return true end
+	-- mouse buttons except left-click (safe enum access)
+	local ok, isMouse = pcall(function()
+		return t == Enum.UserInputType.MouseButton2
+			or t == Enum.UserInputType.MouseButton3
+			or t == Enum.UserInputType.MouseButton4
+			or t == Enum.UserInputType.MouseButton5
+	end)
+	return ok and isMouse == true
 	end
 
 	local function getBindName(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton3 then return "Mouse3" end
+	local mbNames = {}
+	pcall(function()
+		mbNames[Enum.UserInputType.MouseButton2] = "Mouse2"
+		mbNames[Enum.UserInputType.MouseButton3] = "Mouse3"
+		mbNames[Enum.UserInputType.MouseButton4] = "Mouse4"
+		mbNames[Enum.UserInputType.MouseButton5] = "Mouse5"
+	end)
+	if mbNames[input.UserInputType] then return mbNames[input.UserInputType] end
 	local labels = {
 	Zero = "0", One = "1", Two = "2", Three = "3", Four = "4",
 	Five = "5", Six = "6", Seven = "7", Eight = "8", Nine = "9",
@@ -15748,14 +15914,24 @@ local function customSpeedRow(parent, customSpeed, order)
 	speedValues.BodyLockRange = math.clamp(roundDecimal(value, 2) or value, 1, 80)
 	saveConfig()
 	end)
-	sectionLabel(movement, "TP DOWN", 75)
-	actionRow(movement, "TP Down", "TP Down", 76, function()
+	toggleRow(movement, "Spinbot", "Spinbot", toggleStates["Spinbot"], 75, true, function(on)
+	setFeature("Spinbot", on)
+	end)
+	inputRow(movement, "Spinbot Speed", speedValues.SpinbotSpeed or 25, 76, function(value)
+	speedValues.SpinbotSpeed = math.clamp(roundDecimal(value, 2) or value, 1, 120)
+	saveConfig()
+	end)
+	toggleRow(movement, "Force Spinbot", "Force Spinbot", toggleStates["Force Spinbot"], 77, false, function(on)
+	setFeature("Force Spinbot", on)
+	end)
+	sectionLabel(movement, "TP DOWN", 78)
+	actionRow(movement, "TP Down", "TP Down", 79, function()
 	if FeatureToggles["TP Down"] then pcall(FeatureToggles["TP Down"]) end
 	end)
-	toggleRow(movement, "Auto TP Down", "Auto TP Down", toggleStates["Auto TP Down"], 77, false, function(on)
+	toggleRow(movement, "Auto TP Down", "Auto TP Down", toggleStates["Auto TP Down"], 80, false, function(on)
 	setFeature("Auto TP Down", on)
 	end)
-	inputRow(movement, "Height (studs)", speedValues.AutoTPDownHeight, 78, function(value)
+	inputRow(movement, "Height (studs)", speedValues.AutoTPDownHeight, 81, function(value)
 	speedValues.AutoTPDownHeight = math.clamp(roundDecimal(value, 2) or value, 0.1, 1000)
 	saveConfig()
 	end)
@@ -16603,8 +16779,12 @@ local function customSpeedRow(parent, customSpeed, order)
 	-- Listening mode for assigning a bind
 	if listeningBindBtn and listeningFeature then
 	local updatedFeature = listeningFeature
+	-- Debug: show what Roblox received (useful for MX Master / Logi Options mappings)
+	pcall(function()
+		print("[Aroosh Bind]", tostring(input.UserInputType), tostring(input.KeyCode))
+	end)
 	local isTouchOrClick = (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1)
-	if isBindableInput(input) or isTouchOrClick or isMouseSideButton(input) then
+	if isBindableInput(input) or isTouchOrClick or isMouseSideButton(input) or isExtraMouseKey(input) then
 	if isTouchOrClick or input.KeyCode == Enum.KeyCode.Escape or (isClearKeybindInput(input) and updatedFeature ~= "Toggle UI") then
 	FeatureKeybinds[updatedFeature] = nil
 	local emptyText = (listeningBindBtn.Size.X.Offset == 42 or listeningBindBtn:GetAttribute("MiniUIBind")) and "-" or "BIND"
@@ -16613,6 +16793,9 @@ local function customSpeedRow(parent, customSpeed, order)
 	local mbName = getMouseButtonBind(input)
 	FeatureKeybinds[updatedFeature] = mbName
 	listeningBindBtn.Text = mouseButtonDisplay[mbName] or mbName
+	elseif isExtraMouseKey(input) then
+	FeatureKeybinds[updatedFeature] = input.KeyCode
+	listeningBindBtn.Text = keyDisplayName(input.KeyCode)
 	else
 	FeatureKeybinds[updatedFeature] = input.KeyCode
 	listeningBindBtn.Text = keyDisplayName(input.KeyCode)
@@ -16847,8 +17030,30 @@ if toggleStates["Inf Jump"] and (_G.__CrystalInfJumpMode or "hold") == "hold" th
 	-- only shortcut UI on both platforms, so do not build that old screen.
 	-- ======================================================================
 	ScreenGui.Enabled = true
+	-- Ensure UI is actually visible after intro
+	pcall(function()
+		local show = true
+		if type(_G.__CrystalPanelVisible) == "boolean" then
+			show = _G.__CrystalPanelVisible
+		elseif toggleStates and toggleStates["Toggle UI"] == false then
+			show = false
+		end
+		if _G.__setPanelVisible then
+			_G.__setPanelVisible(show)
+		else
+			local panel = ScreenGui:FindFirstChild("Panel")
+			if panel then panel.Visible = show end
+		end
+		-- Always show restore pill if panel hidden
+		for _, c in ipairs(ScreenGui:GetChildren()) do
+			if c:IsA("TextButton") and (c.Name == "KatanaRestoreButton" or c.Name == "EclipseRestoreButton" or c.Text == "Aroosh") then
+				c.Visible = not show
+			end
+		end
+		print("[Aroosh] UI ready · panel visible =", show)
+	end)
 	-- Iniciar el recorrido pesado solo cuando toda la interfaz y sus funciones
-	-- ya están listas. El trabajo se mantiene diferido para no bloquear el frame
+	-- ya estan listas. El trabajo se mantiene diferido para no bloquear el frame
 	-- en el que termina de cargar el script.
 	task.defer(function()
 	for _, feature in ipairs({ "FPS Boost", "Anti Lag", "Optimizer" }) do
