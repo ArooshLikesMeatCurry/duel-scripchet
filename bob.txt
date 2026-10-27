@@ -6,6 +6,130 @@
 local introShouldPlay = true
 local THEME_ACCENT = Color3.fromRGB(70, 255, 140) -- Aroosh green
 
+-- ============================
+-- BAT HIT FIX (equip + touchinterest + multi-activate)
+-- ============================
+_G.__ArooshHitFix = _G.__ArooshHitFix or {}
+do
+	local H = _G.__ArooshHitFix
+	H.graceUntil = 0
+	function H.markMedusaGrace(sec)
+		H.graceUntil = tick() + (sec or 2.0)
+	end
+	function H.inMedusaGrace()
+		return tick() < (H.graceUntil or 0)
+	end
+	function H.isFreezeTool(tool)
+		if not tool then return false end
+		local n = tool.Name:lower()
+		return n:find("medusa", 1, true) or n:find("petrif", 1, true)
+			or n:find("gorgon", 1, true) or n:find("stone", 1, true)
+	end
+	function H.isBatTool(tool)
+		if not tool or not tool:IsA("Tool") then return false end
+		if H.isFreezeTool(tool) then return false end
+		local n = tool.Name:lower()
+		return n:find("bat", 1, true) ~= nil or n:find("slap", 1, true) ~= nil
+	end
+	function H.getBat(player)
+		player = player or game:GetService("Players").LocalPlayer
+		local char = player and player.Character
+		if not char then return nil end
+		local eq = char:FindFirstChildOfClass("Tool")
+		if H.isBatTool(eq) then return eq end
+		local bp = player:FindFirstChild("Backpack")
+		if bp then
+			for _, t in ipairs(bp:GetChildren()) do
+				if H.isBatTool(t) then return t end
+			end
+		end
+		return nil
+	end
+	function H.recover(char)
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+		pcall(function()
+			hum.PlatformStand = false
+			hum.Sit = false
+			local st = hum:GetState()
+			if st == Enum.HumanoidStateType.Physics or st == Enum.HumanoidStateType.Ragdoll
+				or st == Enum.HumanoidStateType.FallingDown or st == Enum.HumanoidStateType.PlatformStanding then
+				hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+				hum:ChangeState(Enum.HumanoidStateType.Running)
+			end
+		end)
+	end
+	function H.fireTouch(bat, targetRoot)
+		if typeof(firetouchinterest) ~= "function" or not bat or not targetRoot then return end
+		local handle = bat:FindFirstChild("Handle") or bat:FindFirstChildWhichIsA("BasePart")
+		if not handle then return end
+		local function bump(part)
+			if not part then return end
+			pcall(function()
+				firetouchinterest(handle, part, 0)
+				firetouchinterest(handle, part, 1)
+			end)
+		end
+		bump(targetRoot)
+		local parent = targetRoot.Parent
+		if parent then
+			for _, n in ipairs({"UpperTorso", "Torso", "Head", "HumanoidRootPart", "LowerTorso"}) do
+				bump(parent:FindFirstChild(n))
+			end
+		end
+	end
+	function H.ensureBatEquipped(player)
+		player = player or game:GetService("Players").LocalPlayer
+		local char = player and player.Character
+		if not char then return nil end
+		if H.inMedusaGrace() then
+			local eq = char:FindFirstChildOfClass("Tool")
+			if H.isFreezeTool(eq) then return nil end
+		end
+		local bat = H.getBat(player)
+		if not bat then return nil end
+		if bat.Parent ~= char then
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then pcall(function() hum:EquipTool(bat) end) end
+		end
+		return bat.Parent == char and bat or bat
+	end
+	function H.hardSwing(bat, targetRoot, spam)
+		spam = spam or 5
+		local player = game:GetService("Players").LocalPlayer
+		local char = player and player.Character
+		H.recover(char)
+		bat = bat or H.ensureBatEquipped(player)
+		if not bat then return false end
+		if char and bat.Parent ~= char then
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then pcall(function() hum:EquipTool(bat) end) end
+		end
+		for _ = 1, spam do
+			pcall(function() bat:Activate() end)
+			H.fireTouch(bat, targetRoot)
+			local remote = bat:FindFirstChildWhichIsA("RemoteEvent", true)
+			if remote then pcall(function() remote:FireServer() end) end
+		end
+		return true
+	end
+	-- watch manual medusa equip
+	task.spawn(function()
+		local Players = game:GetService("Players")
+		local LP = Players.LocalPlayer
+		local function watch(char)
+			if not char then return end
+			char.ChildAdded:Connect(function(ch)
+				if H.isFreezeTool(ch) then H.markMedusaGrace(2.0) end
+			end)
+		end
+		if LP.Character then watch(LP.Character) end
+		LP.CharacterAdded:Connect(watch)
+	end)
+	print("[Aroosh] Hit-fix helpers loaded")
+end
+
+
 local TweenService = game:GetService("TweenService")
 local ContentProvider = game:GetService("ContentProvider")
 local RunService = game:GetService("RunService")
@@ -2471,6 +2595,28 @@ end
 	_G.__CrystalGetVisualEnemy = function()
 	if trackedEnemy and trackedEnemy.Parent == Players then return trackedEnemy end
 	return nil
+	end
+	-- Nearest living enemy (aimbot fallback when RIVAL panel empty)
+	_G.__CrystalGetNearestEnemy = function(fromRoot)
+		local best, bestD = nil, math.huge
+		local origin = fromRoot and fromRoot.Position
+		if not origin then
+			local c = Player.Character
+			local r = c and c:FindFirstChild("HumanoidRootPart")
+			if not r then return nil end
+			origin = r.Position
+		end
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= Player and plr.Character then
+				local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+				local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+				if hum and hrp and hum.Health > 0 then
+					local d = (hrp.Position - origin).Magnitude
+					if d < bestD then bestD, best = d, plr end
+				end
+			end
+		end
+		return best
 	end
 
 	-- Crear la widget una sola vez
@@ -6202,7 +6348,10 @@ if toggleStates["Medusa Counter"] then
 	local equippedTool = char:FindFirstChildOfClass("Tool")
 	if equippedTool then
 	local equippedName = equippedTool.Name:lower()
-	if equippedName:find("bat", 1, true) or equippedName:find("slap", 1, true) then
+	if (equippedName:find("bat", 1, true) or equippedName:find("slap", 1, true))
+		and not equippedName:find("medusa", 1, true)
+		and not equippedName:find("stone", 1, true)
+		and not equippedName:find("gorgon", 1, true) then
 	return equippedTool
 	end
 	end
@@ -6211,7 +6360,10 @@ if toggleStates["Medusa Counter"] then
 	for _, tool in ipairs(backpack:GetChildren()) do
 	if tool:IsA("Tool") then
 	local toolName = tool.Name:lower()
-	if toolName:find("bat", 1, true) or toolName:find("slap", 1, true) then
+	if (toolName:find("bat", 1, true) or toolName:find("slap", 1, true))
+		and not toolName:find("medusa", 1, true)
+		and not toolName:find("stone", 1, true)
+		and not toolName:find("gorgon", 1, true) then
 	return tool
 	end
 	end
@@ -6264,13 +6416,14 @@ if toggleStates["Medusa Counter"] then
 	if currentHumanoid.AutoRotate then currentHumanoid.AutoRotate = false end
 
 	local bat = getBat()
-	-- Only auto-equip bat if player is not holding Medusa/freeze
+	-- HIT FIX: always prefer bat in hand while aimbot is on (short medusa grace only)
 	do
-		local eq = currentChar and currentChar:FindFirstChildOfClass("Tool")
-		local n = eq and eq.Name:lower() or ""
-		local freezeOut = n:find("medusa", 1, true) or n:find("petrif", 1, true) or n:find("gorgon", 1, true) or n:find("stone", 1, true)
-		if freezeOut then
-			bat = nil -- pause bat spam while freezing
+		if _G.__ArooshHitFix and _G.__ArooshHitFix.ensureBatEquipped then
+			if not (_G.__ArooshHitFix.inMedusaGrace and _G.__ArooshHitFix.inMedusaGrace()) then
+				bat = _G.__ArooshHitFix.ensureBatEquipped(Player) or bat
+			else
+				bat = nil
+			end
 		elseif bat and bat.Parent ~= currentChar then
 			pcall(currentHumanoid.EquipTool, currentHumanoid, bat)
 		end
@@ -6287,62 +6440,102 @@ if toggleStates["Medusa Counter"] then
 	local ok, result = pcall(_G.__CrystalTPBatGetMarkerCFrame)
 	if ok then markerCFrame = result end
 	end
-	-- No elegir un rival distinto al que ve el usuario en el panel RIVAL.
-	-- La marca azul conserva prioridad absoluta cuando esta visible.
+	-- TRACK FIX: RIVAL panel first, else nearest living enemy (was: return and stop)
 	local visualTarget = nil
 	local visualTargetCFrame = nil
 	local visualEnemy = _G.__CrystalGetVisualEnemy and _G.__CrystalGetVisualEnemy()
+	if not visualEnemy and _G.__CrystalGetNearestEnemy then
+		visualEnemy = _G.__CrystalGetNearestEnemy(currentRoot)
+	end
 	if visualEnemy and visualEnemy ~= Player and visualEnemy.Character then
 	local visualRoot = visualEnemy.Character:FindFirstChild("HumanoidRootPart")
 	local visualHumanoid = visualEnemy.Character:FindFirstChildOfClass("Humanoid")
 	if visualRoot and visualHumanoid and visualHumanoid.Health > 0 then
 	visualTarget = visualRoot
-	visualTargetCFrame = getEnemyRenderCFrame(visualRoot)
+	visualTargetCFrame = getEnemyRenderCFrame(visualRoot) or visualRoot.CFrame
 	end
 	end
 	if not markerCFrame and (not visualTarget or not visualTargetCFrame) then return end
 	_G.__CrystalAceNormalAimbot.target = markerCFrame or visualTarget
+	_G.__CrystalAceNormalAimbot.targetPlayer = visualEnemy
 
-	-- El objetivo visual es un punto puro: no sumar AssemblyLinearVelocity ni
-	-- LookVector, ya que ambos pueden estar manipulados por el rival.
 	local myPosition = currentRoot.Position
 	local targetCFrame = markerCFrame or visualTargetCFrame
 	local targetPosition = targetCFrame.Position
-	local predictedChase = targetPosition
+
+	-- TRACK FIX: light prediction so we stick to moving / laggy targets
+	local targetVel = Vector3.zero
+	if visualTarget then
+		pcall(function() targetVel = visualTarget.AssemblyLinearVelocity end)
+	end
+	local pingSec = 0.08
+	pcall(function()
+		pingSec = math.clamp(Player:GetNetworkPing(), 0.04, 0.35)
+	end)
+	local predictedChase = targetPosition + Vector3.new(targetVel.X, targetVel.Y * 0.45, targetVel.Z) * (pingSec + 0.12)
 	local direction = predictedChase - myPosition
 	local flatDirection = Vector3.new(direction.X, 0, direction.Z)
+	local realDist = (targetPosition - myPosition).Magnitude
 
-	local chaseSpeed = toggleStates["Lagger Aimbot"] and 34 or (selectedMode == "Lagger" and 40 or 60)
+	local baseSpeed = tonumber(speedValues and speedValues.CypherAimbotApproachSpeed) or 60
+	local chaseSpeed = toggleStates["Lagger Aimbot"] and 34 or (selectedMode == "Lagger" and 40 or baseSpeed)
+	chaseSpeed = math.clamp(chaseSpeed, 20, 140)
+	-- close range: push harder so we don't orbit past them
+	if realDist < 25 then chaseSpeed = math.clamp(chaseSpeed * 1.18, 20, 140) end
+	if realDist < 12 then chaseSpeed = math.clamp(chaseSpeed * 1.12, 20, 140) end
+
 	local horizontalVelocity = Vector3.zero
-	if flatDirection.Magnitude >= 0.01 then
-	horizontalVelocity = flatDirection.Unit * chaseSpeed
+	if flatDirection.Magnitude >= 0.05 then
+		horizontalVelocity = flatDirection.Unit * chaseSpeed
+	elseif realDist > 2.5 then
+		local bodyFlat = Vector3.new(targetPosition.X - myPosition.X, 0, targetPosition.Z - myPosition.Z)
+		if bodyFlat.Magnitude > 0.05 then
+			horizontalVelocity = bodyFlat.Unit * (chaseSpeed * 0.85)
+		end
 	end
-	local verticalVelocity = (targetPosition.Y - myPosition.Y) * 19.5
-	verticalVelocity = math.clamp(verticalVelocity, -70, 110)
-	local desiredVelocity = Vector3.new(
-	horizontalVelocity.X,
-	verticalVelocity,
-	horizontalVelocity.Z
+	local verticalVelocity = (predictedChase.Y - myPosition.Y) * 16
+	verticalVelocity = math.clamp(verticalVelocity, -90, 125)
+	-- when target is airborne, bias upward harder
+	if targetVel.Y > 12 or (targetPosition.Y - myPosition.Y) > 4 then
+		verticalVelocity = math.clamp(verticalVelocity + 18, -90, 130)
+	end
+	currentRoot.AssemblyLinearVelocity = Vector3.new(
+		horizontalVelocity.X,
+		verticalVelocity,
+		horizontalVelocity.Z
 	)
-	currentRoot.AssemblyLinearVelocity = desiredVelocity
 
-	local predictedPosition = targetPosition
-	if (predictedPosition - myPosition).Magnitude > 0.1 then
-	local goalCFrame = CFrame.lookAt(myPosition, predictedPosition)
-	local difference = currentRoot.CFrame:Inverse() * goalCFrame
-	local rx, ry, rz = difference:ToEulerAnglesXYZ()
-	rx = math.clamp(rx, -2.5, 2.5)
-	ry = math.clamp(ry, -2.5, 2.5)
-	rz = math.clamp(rz, -2.5, 2.5)
-	currentRoot.AssemblyAngularVelocity = currentRoot.CFrame:VectorToWorldSpace(
-	Vector3.new(rx * 42, ry * 42, rz * 42)
-	)
+	-- Face target (CFrame + angular) so bat handle points at them
+	local lookAt = Vector3.new(predictedChase.X, myPosition.Y, predictedChase.Z)
+	if (lookAt - myPosition).Magnitude > 0.08 then
+		pcall(function()
+			currentRoot.CFrame = CFrame.lookAt(myPosition, lookAt)
+		end)
+		local goalCFrame = CFrame.lookAt(myPosition, predictedChase)
+		local difference = currentRoot.CFrame:Inverse() * goalCFrame
+		local rx, ry, rz = difference:ToEulerAnglesXYZ()
+		rx = math.clamp(rx, -2.5, 2.5)
+		ry = math.clamp(ry, -2.5, 2.5)
+		rz = math.clamp(rz, -2.5, 2.5)
+		currentRoot.AssemblyAngularVelocity = currentRoot.CFrame:VectorToWorldSpace(
+			Vector3.new(rx * 48, ry * 48, rz * 48)
+		)
 	end
 
 	local swingNow = tick()
-	if bat and swingNow >= (_G.__CrystalAceNormalAimbot.nextSwingAt or 0) then
-	_G.__CrystalAceNormalAimbot.nextSwingAt = swingNow + 0.08
-	pcall(bat.Activate, bat)
+	-- Always try hit when near target (hit-fix)
+	local aimTargetRoot = visualTarget
+	local near = false
+	if aimTargetRoot and currentRoot then
+		near = (aimTargetRoot.Position - currentRoot.Position).Magnitude <= 28
+	end
+	if (bat or near) and swingNow >= (_G.__CrystalAceNormalAimbot.nextSwingAt or 0) then
+	_G.__CrystalAceNormalAimbot.nextSwingAt = swingNow + 0.05
+	if _G.__ArooshHitFix and _G.__ArooshHitFix.hardSwing then
+		_G.__ArooshHitFix.hardSwing(bat, aimTargetRoot, near and 6 or 3)
+	elseif bat then
+		pcall(bat.Activate, bat)
+	end
 	end
 	end))
 	end
@@ -6416,7 +6609,7 @@ if toggleStates["Medusa Counter"] then
 	local ZCFG = {
 	-- Tuned for more consistent bat hits (ping lead + closer commit)
 	FOLLOW_SPEED = 78,
-	ACTIVATE_DISTANCE = 18,
+	ACTIVATE_DISTANCE = 24,
 	MIN_FOLLOW_DISTANCE = 0.6,
 	PREDICTION_TIME = 0.28,
 	PREDICT_AHEAD = 5.5,
@@ -6575,7 +6768,11 @@ if toggleStates["Medusa Counter"] then
 	if md > 0.1 then rotateZurichRoot(root, markedDirection) end
 	if md <= (ZCFG.ACTIVATE_DISTANCE + 4) and tick() - Z.lastActivationTime >= (ZCFG.SWING_COOLDOWN or 0.05) then
 		if bat then
-			for _ = 1, (ZCFG.SWING_SPAM or 4) do pcall(bat.Activate, bat) end
+			if _G.__ArooshHitFix and _G.__ArooshHitFix.hardSwing then
+				_G.__ArooshHitFix.hardSwing(bat, targetRoot, (ZCFG.SWING_SPAM or 4) + 2)
+			else
+				for _ = 1, (ZCFG.SWING_SPAM or 4) do pcall(bat.Activate, bat) end
+			end
 		end
 		Z.lastActivationTime = tick()
 	end
@@ -6677,16 +6874,16 @@ if toggleStates["Medusa Counter"] then
 	-- High ping: swing a bit earlier / more often
 	local activateDist = ZCFG.ACTIVATE_DISTANCE + math.clamp(Z.realPingMs / 40, 0, 8)
 	if realDist <= activateDist and tick() - Z.lastActivationTime >= swingCd then
-	if bat then
 		local spam = ZCFG.SWING_SPAM or 3
 		if realDist <= (ZCFG.CLOSE_RANGE or 10) then spam = spam + 2 end
 		if Z.realPingMs >= 150 then spam = spam + 2 end
 		if Z.realPingMs >= 280 then spam = spam + 2 end
-		for _ = 1, spam do
-			pcall(bat.Activate, bat)
+		if _G.__ArooshHitFix and _G.__ArooshHitFix.hardSwing then
+			_G.__ArooshHitFix.hardSwing(bat, targetRoot, spam)
+		elseif bat then
+			for _ = 1, spam do pcall(bat.Activate, bat) end
 		end
-	end
-	Z.lastActivationTime = tick()
+		Z.lastActivationTime = tick()
 	end
 	if toTarget.Magnitude > ZCFG.MIN_FOLLOW_DISTANCE then
 	local base = tonumber(speedValues.CypherAimbotApproachSpeed) or ZCFG.FOLLOW_SPEED
@@ -6741,7 +6938,7 @@ if toggleStates["Medusa Counter"] then
 	}
 	local V2CFG = {
 		FOLLOW_SPEED = 80,
-		ACTIVATE_DISTANCE = 22,
+		ACTIVATE_DISTANCE = 28,
 		MIN_FOLLOW_DISTANCE = 0.45,
 		PREDICTION_TIME = 0.22,
 		PREDICT_AHEAD = 3.5,
@@ -7041,13 +7238,20 @@ if toggleStates["Medusa Counter"] then
 			if tpDownActive then activateDist += 4 end
 			if realDist <= activateDist and tick() - V2.lastActivationTime >= swingCd then
 				-- Only spam bat when bat is in hand — never while Medusa is equipped
-				if bat and bat.Parent == currentChar and not freezeOut then
+				do
 					local spam = V2CFG.SWING_SPAM
 					if realDist <= V2CFG.CLOSE_RANGE then spam += 3 end
 					if V2.realPingMs >= 120 then spam += 2 end
 					if V2.realPingMs >= 220 then spam += 3 end
 					if V2.realPingMs >= 300 then spam += 3 end
-					for _ = 1, spam do pcall(bat.Activate, bat) end
+					-- HIT FIX: force bat equip then hard swing (touchinterest)
+					if _G.__ArooshHitFix and _G.__ArooshHitFix.hardSwing then
+						if not (_G.__ArooshHitFix.inMedusaGrace and _G.__ArooshHitFix.inMedusaGrace()) then
+							_G.__ArooshHitFix.hardSwing(bat, targetRoot, spam)
+						end
+					elseif bat and bat.Parent == currentChar and not freezeOut then
+						for _ = 1, spam do pcall(bat.Activate, bat) end
+					end
 				end
 				V2.lastActivationTime = tick()
 			end
